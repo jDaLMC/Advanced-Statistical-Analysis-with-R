@@ -1,0 +1,326 @@
+---
+title: "STAT 455: Assignment 3"
+author: "Jo Dang"
+output: pdf_document
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE, fig.height = 3, fig.width = 7)
+```
+
+In this assignment, we'll investigate factors related to prices of AirBnB's in Chicago. The data are part of Open Exercise 2 in Section 8.13.3 of the Roback and Legler text.  
+
+Trinh (2018) collected data on 1561 Airbnb listings in Chicago from August 2016, and then they merged in information from the neighborhood (out of 43 in Chicago) where the listing was located. The dataset contains information on the following variables. 
+
+    - `overall_satisfaction` = rating on a 0-5 scale.
+    - `price` = price for one night (in dollars)
+    - `reviews` = number of reviews posted
+    - `room_type` = Entire home/apt, Private room, or Shared room
+    - `accommodates` = number of people the unit can hold
+    - `bedrooms` = number of bedrooms
+    - `minstay` = minimum length of stay (in days)
+    - `neighborhood` = neighborhood where unit is located (1 of 43)
+    - `district` = district where unit is located (1 of 9)
+    - `WalkScore` = quality of the neighborhood for walking (0-100)
+    - `TransitScore` = quality of the neighborhood for public transit (0-100)
+    - `BikeScore` = quality of the neighborhood for biking (0-100)
+    - `PctBlack` = proportion of Black residents in a neighborhood
+
+
+```{r}
+library(tidyverse)
+library(lme4)
+library(lmerTest)
+library(gridExtra)
+```
+
+
+We'll read in the data. 
+
+```{r}
+Airbnb <- read_csv("https://raw.githubusercontent.com/proback/BeyondMLR/master/data/airbnb.csv")
+```
+
+The full data are available at (https://github.com/proback/BeyondMLR/blob/master/data/airbnb.csv). 
+
+## Question 1
+
+
+### a) Explain why this can be thought of as a multilevel dataset. Which of the variables listed above are level one variables? Which are level two variables?      
+
+```{r}
+unique(Airbnb$neighborhood)
+```
+Since Trinh merged data from 43 neighborhoods in Chicago into this data set, I think that the prices of houses in each neighborhood would have some more correlation to each other than to houses in other neighborhoods. Then, I think that the level 2 observational units would be the neighborhoods.
+
+Level 1 variables: price, overall_satisfaction, reviews, room_type, accommodates, bedrooms, minstay.
+Level 2 variables: neighborhood, district, WalkScore, TransitScore, BikeScore, PctBlack.
+
+### b) We are interested in analyzing the relationship between explanatory variables `bedrooms`, `TransitScore`, and response variable `price`. Explain why, in this context, it makes sense to treat neighborhood as a random effect.      
+
+Because houses in the same neighborhoods will probably have similarities, the neighborhoods could actually be the "real" observations, instead of the houses. Using neighborhood as a random effect would help us account for the variability between neighborhoods more, instead of only accounting for the variability between individual houses. Plus, we are also not using 'neighborhood' as a fixed effect, and 'TransitScore' and 'price' are variables that are very likely correlated with 'neighborhood', since houses in the same neighborhood may have similar prices and transit systems/scores.
+
+### c) Give an example of a research question for which it would make sense to fit a model with  neighborhood as a fixed effect. 
+
+"How do prices in different neighborhoods compare to each other?"
+
+### d) Perform an exploratory data analysis involving the three variables mentioned in (b). Create histograms displaying the distributions over all 1,561 observations, as well as the distribution of averages in the 43 neighborhoods. Also create scatterplots comparing response and explanatory variables for both individual observations and neighborhood averages. Include the line of best fit on each scatterplot. Briefly summarize your findings. 
+
+
+```{r}
+theme.1 <- theme(axis.title.x = element_text(size = 14),
+  axis.title.y = element_text(size = 14),
+  plot.title=element_text(hjust=.9,face="italic",size=12))
+```
+
+```{r}
+ggplot(data=Airbnb,aes(x=price)) + 
+  geom_histogram(binwidth = 2, fill = "white",color = "black") + 
+  theme.1 + xlim(10,35) +
+  xlab("Price") + ylab("Frequency") + labs(title="(a)") 
+```
+
+```{r}
+dataByN <- Airbnb %>% 
+  group_by(neighborhood) %>%
+  summarise(meanPrice = mean(price, na.rm = TRUE),
+            accommodates = mean(accommodates, na.rm = TRUE),
+            overall_satisfaction = mean(overall_satisfaction, na.rm = TRUE),
+            ) 
+```
+
+```{r}
+ggplot(data=dataByN,aes(x=meanPrice)) + 
+  geom_histogram(binwidth = 2, fill = "white",color = "black") + 
+  theme.1 + xlim(10,35) +
+  xlab("Price") + ylab("Frequency") + labs(title="(a)") 
+```
+
+```{r}
+ggplot(data=Airbnb, aes(x=(price),y=jitter(accommodates))) +
+  geom_point(aes(color = factor(overall_satisfaction))) + 
+  theme.1 + 
+  geom_smooth(method="lm",color="black") + 
+  ylab("Overall Satisfaction") + 
+  xlab("Price")
+```
+
+```{r}
+ggplot(data=dataByN, aes(x=(meanPrice),y=jitter(accommodates))) +
+  geom_point(aes(color = factor(as.integer(overall_satisfaction)))) + 
+  theme.1 + 
+  geom_smooth(method="lm",color="black") + 
+  ylab("Overall Satisfaction") + 
+  xlab("Price")
+```
+
+The scatterplot show illustrates individual houses show certain clusters at different prices, while the scatterplot for neighborhoods show much more spaced out points. The clusters lead me to believe that there could be some correlation in terms of prices of houses in the same neighborhoods, and that using neighborhoods as observations show us more variability in prices. Similarly, the boxplot for individual houses show frequencies in different prices, but there are some similar numbers of frequencies at similar prices. On the other hand, the boxplot for neighborhoods has more space and also shows clearer differences in prices.
+
+### e) Continue your exploratory data analysis by creating lattice plots displaying `price` vs `bedrooms` for each of the 43 neighborhoods. Include a line of best fit on each plot. 
+
+```{r,fig.width=12, fig.height=10}
+ggplot(Airbnb,aes(x=price,y=bedrooms)) + theme.1 + 
+  geom_point() + geom_smooth(method="lm",color="black") +
+  facet_wrap(~neighborhood,ncol=5) 
+```
+
+## Question 2 
+
+
+### a) Let $Y_{ij}$ denote the price of the $jth$ AirBnB listing in neighborhood $i$. Fit a multilevel model of the form,
+
+\[
+Y_{ij} = [\alpha_{0}+\alpha_{1}\textrm{TransitScore}_{i}+\beta_{0}\textrm{bedrooms}_{ij}+\beta_{1}\textrm{TransitScore}_{i}\textrm{bedrooms}_{ij}] +  \\
+\textrm{} + [u_{i}+v_{i}\textrm{bedrooms}_{ij}+\epsilon_{ij}],
+\]
+
+
+where $\epsilon_{ij}\sim\mathcal{N}(0, \sigma^2)$, and 
+
+$$
+\left[ \begin{array}{c}
+            u_{i} \\ v_{i}
+          \end{array}  \right] \sim \mathcal{N} \left( \left[
+          \begin{array}{c}
+            0 \\ 0
+          \end{array} \right], \left[
+          \begin{array}{cc}
+            \sigma_{u}^{2} & \rho_{uv}\sigma_{u}\sigma_v \\
+            \rho_{uv}\sigma_{u}\sigma_v & \sigma_{v}^{2}
+          \end{array} \right] \right).
+$$
+
+### Use `REML=TRUE`. You do not need to interpret the model estimates at this time. 
+
+
+```{r}
+model1 <- lmer(data=Airbnb, price ~ TransitScore + bedrooms + TransitScore:bedrooms + (bedrooms | neighborhood), REML=TRUE)
+summary(model1)
+```
+
+
+### b) You should have seen a coefficient of $1.3343$ for the `TransitScore` variable. Explain why it is incorrect to say that price is expected to increase by 1.3343 dollars for each one unit increase in transit score, assuming number of bedrooms is held constant.  
+
+Because of the interaction term between 'TransitScore' and 'bedrooms' - different numbers of bedrooms have different rates of change in price depending on transit score.
+
+### c) Write the equation of the regression lines relating price and transit score for an AirBnB with one bedroom. Do the same for an AirBnB with two bedrooms. 
+
+Template (fill in appropriate numbers):  
+
+One bedroom:
+
+\[\widehat{\text{Price}} = -80.3577 + 2.3398 \times \text{Transit Score} 
+\]
+
+Two bedrooms:
+
+\[\widehat{\text{Price}} = -92.9936 + 3.3453 \times \text{Transit Score} 
+\]
+
+### d) Interpret the slope of each equation in (c). 
+
+1 bedroom: For each one unit increase in transit score, the price is expected to increase by 2.3398 dollars
+
+2 bedrooms: For each one unit increase in transit score, the price is expected to increase by 3.3453 dollars
+
+### e) This model contains three random terms, $u_i$, $v_i$, and $\epsilon_{ij}$. Explain what each of these three terms represent in context of AirBnB prices. 
+
+$u_i$ - (the random intercept) is a random effect pertaining to prices between neighborhoods with no bedrooms (one $u_i$ for each neighborhood).
+
+$v_i$ - (the random slope) is a random effect pertaining to changes in prices in relation to number of bedrooms for individual houses (one $v_i$ for each house).
+
+$\epsilon_{ij}$ - is a random error term pertaining to differences between individual houses in the same neighborhood (one $\epsilon_{ij}$ per house)
+
+### f) Give the estimate of $\rho_{uv}$ and interpret it in context of AirBnB prices. 
+
+The correlation between prices for houses without bedrooms and change in price for houses with bedrooms is -0.79, indicating a negative correlation. Neighborhoods with higher prices for no bedrooms generally have greater decreases in price for houses with bedrooms.
+
+### g) Now fit a multilevel model that does not include an error term for slope, that is, a model of the form:
+
+\[
+Y_{ij}  = [\alpha_{0}+\alpha_{1}\textrm{TransitScore}_{i}+\beta_{0}\textrm{bedrooms}_{ij}+\beta_{1}\textrm{TransitScore}_{i}\textrm{bedrooms}_{ij}] \\
+  \textrm{} + [u_{i}+\epsilon_{ij}],
+\]
+
+### where $\epsilon_{ij}\sim N(0,\sigma^2)$ and $u_{i}\sim N(0,\sigma_{u}^{2})$.   
+
+
+### Use `REML=TRUE`. You do not need to interpret parameter estimates at this point.    
+
+
+```{r}
+model2 <- lmer(data=Airbnb, price ~ TransitScore + bedrooms + TransitScore:bedrooms + (1 | neighborhood), REML=TRUE)
+summary(model2)
+```
+
+
+### h) Explain in context the difference between the models in parts (a) ang (g). What does each model say about the relationship between transit score, bedrooms, and price?
+
+The model in part (a) allows the differences in house price with different transit scores to vary randomly between different numbers of bedrooms. On the other hand, the model in (g) only allows base prices to vary between neighborhoods, after accounting for fixed effects, but assumes that the effect of the numbers of bedrooms is the same across all neighborhoods.
+
+### i) Using the model in part (g), give estimates of $\sigma_u$ and $\sigma$. Interpret each of these estimates. What do these tell us about the amount of variability in prices between neighborhoods, relative to the amount of variability in prices for AirBnB's in the same neighborhood.  
+
+After accounting for transit score, number of bedrooms, and their interaction, the standard deviation in prices between different neighborhoods is estimated to be $\sigma_u$ = 16.43.
+
+After accounting for transit score, number of bedrooms, and their interaction, the standard deviation in prices between different houses in the same neighborhoods is estimated to be $\sigma$ = 64.86.
+
+There is more variability in prices between different houses int the same neighborhood than between houses in different neighborhoods, after accounting for transit score, number of bedrooms, and their interaction.
+
+### k) Calculate AIC and BIC for the models from parts (a) and (g). Which model is preferred?   
+
+```{r}
+AIC(model1, model2)
+BIC(model1, model2)
+```
+Both the AIC and BIC of the model with the error term on the slope are better.
+
+### l) Now fit an unconditional means model, that is a model of the form: 
+
+\[
+Y_{ij}  = \alpha_{0} + [u_{i}+\epsilon_{ij}],
+\]
+
+### where $u_i\sim N(0, \sigma^2_u)$ and $\epsilon_{ij}\sim N(0, \sigma^2)$. 
+
+```{r}
+#Model A (Unconditional means model)
+model.a <- lmer(price ~ 1 + (1 | neighborhood), REML = TRUE, data = Airbnb)
+summary(model.a)
+```
+
+### Calculate and interpret the intraclass correlation coefficient. 
+
+$\hat{p}$ = 1098.9225/(1098.9225 + 6776.5824) = 0.139536768.
+
+13.95% of the total variability in prices are attributable to differences among neighborhoods.
+
+### m) Why are the estimates of $\sigma_u$ and $\sigma$ in (l) different than in (i). How do our interpretations change?   
+
+In the unconditional means model (l), we are not using any explanatory variables. In other words, we are not assuming any relationships between the variables.
+
+The standard deviation in average prices between different neighborhoods is estimated to be $\sigma_u$ = 33.15.
+
+The estimated standard deviation in prices between houses in the same neighborhoods is $\sigma$ = 82.32.
+
+## Question 3   
+
+### A travel agency is interested in investigating questions such as: What are characteristics of a higher priced listing? Are the most influential traits associated with individual listings or entire neighborhoods? Are there intriguing interactions where the effect of one variable depends on levels of another? Build a model that can be used to address these questions, and report your key findings. Use AIC and BIC, as well as likelihood ratio tests to justify whether to include variables and/or interactions from your model. Then summarize your key findings in a manner similar to what is done on slide 3.5.10 in the Stat 455 notes. (You don't need to interpret every coefficient in the model, but state which are associated with higher or lower prices, and provide a few key interpetations.)
+
+### There are many possible options for a final model. You will be graded based on your justification and interpretations, rather than on the variables you include in your model.   
+
+```{r}
+modelA <- lmer(price ~ . + TransitScore:bedrooms + (WalkScore + TransitScore + 
+    BikeScore + PctBlack + bedrooms | neighborhood), data = Airbnb, REML=TRUE)
+
+modelB <- lmer(price ~ . + TransitScore:bedrooms + (1 | neighborhood), data = Airbnb, REML=TRUE)
+
+modelC <- lmer(price ~ district + WalkScore + TransitScore + 
+    BikeScore + PctBlack + TransitScore:bedrooms + (1 | neighborhood), data = Airbnb, REML=TRUE)
+```
+
+```{r}
+summary(modelA)
+```
+
+```{r}
+summary(modelB)
+```
+
+```{r}
+summary(modelC)
+```
+
+```{r}
+AIC(modelA, modelB)
+BIC(modelA, modelB)
+
+AIC(modelB, modelC)
+BIC(modelB, modelC)
+```
+### Models:
+
+Model A is more like an "everything" model, which means that it is supposed to contain every possible design detail that I think would be useful: 2 levels to account for correlations between houses within the same neighborhoods, random slopes to account for the possible difference in effects of the number of bedrooms on price between neighborhoods, as well as every variable as fixed effects.
+
+Model B is a mixed effects model that has the same fixed effects as model A and neighborhood as the random effect. From model A, we actually find that the estimated standard deviation in prices between houses in the same neighborhoods based on the number of bedrooms is $\sigma_u$ = 15.35, which is much less than that of prices within neighborhoods ($\sigma$ = 57.13). And this shows in the AIC and BIC of model B: they're both better than the AIC and BIC of model A, since model B does not have the bedroom-neighborhood random slope. Actually, the values that represent the standard deviations in price in houses between neighborhoods depending on all the level 2 variables in Model A were also very close to $\sigma$. When we remove the level 2 variables (in Model B), both the AIC and BIC favor this decision. 
+
+Model C used level 2 variables as the the only fixed effects, plus an interaction term, to check whether or not they do belong in level 2. This means that if this model does well, then perhaps not all of these variables should be in level 2. However, if the models does worse than a model that has these variables as random effects, then perhaps we have made the right judgement about them as level 2 variables. The AIC and BIC of Model C both suggest the latter, so we gained a bit of insight into our variables and models. 
+
+From the 3 models, model B is most favored according to the AIC and BIC.
+
+### Key Findings:
+
+After controlling for other factors we have evidence that:
+
+Price is higher when a house has good ratings, accommodates more, and in certain neighborhoods.
+
+Price is lower for shared rooms than for private rooms, higher minimum stay requirement, for each additional bedroom a house has (this is counter-intuitive, but the p-value is around 0.12 which is actually not low enough to show a strong relationship), and in certain neighborhoods.
+
+### Interpretations of key fixed effects:
+
+For each additional point in overall satisfaction is associated with an estimated 27.54 mean increase in price for entire homes in Albany Park, after controlling for all other variables.
+
+The p-values for differences in effects on prices based on neighborhoods are very large in the fixed effects table. This could indicate that the variability in effects on price between neighborhoods is not as significant as I had expected. However, it does not necessarily have to be significant. Moreover, we are using an assumed level 2 variable on level 1, so these results might not be as big of a concern.
+
+### Interpretations of random effects:
+
+After accounting for the effects of walking score, transit score, biking score, percentage of black citizens, there is less variability in price between houses in the same neighborhood ($\sigma_u$ =  15.35), than in variability between prices of different neighborhoods ($\sigma$ = 57.13).
