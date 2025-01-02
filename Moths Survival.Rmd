@@ -1,0 +1,331 @@
+---
+title: "STAT 455: Assignment 6"
+author: "Jo Dang"
+output: pdf_document
+---
+
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE,  fig.width = 12)
+```
+
+```{r}
+library(tidyverse)
+library(ggformula)
+library(pscl)
+```
+
+
+## Question 1: 
+
+
+An article in the *Journal of Animal Ecology* by Bishop(1972) investigated whether moths provide evidence of “survival of the fittest” with their camouflage traits.  Researchers glued equal numbers of light and dark morph moths in lifelike positions on tree trunks at 7 locations from 0 to 51.2 km from Liverpool.  They then recorded the number of moths removed after 24 hours, presumably by predators.  The hypothesis was that, since tree trunks near Liverpool were blackened by pollution, light morph moths would be more likely to be removed near Liverpool. 
+
+Data (Ramsey and Schafer, 2002) can be found in `moth.csv` and contains the variables below.  
+
+    -  `MORPH` = light or dark
+    -  `DISTANCE` = kilometers from Liverpool
+    -  `PLACED` = number of moths of a specific morph glued to trees at that location
+    -  `REMOVED` = number of moths of a specific morph removed after 24 hours
+
+```{r}
+moth <- read_csv("https://raw.githubusercontent.com/proback/BeyondMLR/master/data/moth.csv")
+```
+
+```{r}
+head(moth)
+```
+
+### a) We want to model the number of moths removed out of the total number placed, using morph and distance as explanatory variables. Explain why it makes sense to use a binomial logistic regression model in this context.      
+
+The question is asking not just the number of moths removed (given some conditions), but it is asking for that number with respect to the population of moths (given those same conditions). So, the question is a count with a cap.
+
+A binomial regression model is great at finding that exact type of response by calculating the probability of ('removed' as the) 'success' of an observation. With that, we can calculate the percentage of successful cases in a population.
+
+### b) Fit the binomial logistic regression model. Display the summary output. Interpret the coefficients associated with both the `DISTANCE` and `MORPH` variables.  
+
+```{r}
+M1 <- glm(cbind(REMOVED, (PLACED-REMOVED)) ~ DISTANCE + MORPH , 
+          family = binomial(link="logit"), data = moth)
+summary(M1)
+```
+For each one kilometer increase in distance from Liverpool, the odds of a moth being removed are expected to multiply by a factor of e^(0.005314) = 1.00532814 (0.5% increase), assuming that morph stays constant.
+
+Assuming that distance is constant, the odds of a light moth being removed are expected to be e^(-0.404052) = 0.67 times the odds of a dark moth being removed (a 33% decrease).
+
+### c) Calculate the probability of a moth being removed assuming it is 15 km from Liverpool and is light `MORPH`. 
+
+\[\frac{e^{-0.732690 + 0.005314*15 - 0.404052}}{1 - e^{-0.732690 + 0.005314*15 - 0.404052}} = 0.533\]
+
+### d) Calculate the probability of a moth being removed assuming it is 35 km from Liverpool and is dark `MORPH`. 
+
+\[\frac{e^{-0.732690 + 0.005314*35}}{1 - e^{-0.732690 + 0.005314*35}} = 1.374\]
+
+### e) Create an empirical logit plot of logits vs. distance. Facet by morph. 
+
+```{r}
+phat <- with(moth, (REMOVED)/(PLACED))
+moth$elogit <- log(phat/(1-phat))
+## Plots
+ggplot(moth, aes(x=DISTANCE, y=elogit))+
+    geom_point(shape=1) +    # Use hollow circles
+    geom_smooth(method=lm,   # Add linear regression line
+                se=FALSE) + # Don't add shaded confidence region
+  facet_wrap(~MORPH)+
+  xlab("Distance (in km) from Liverpool") + ylab("empirical logits") + 
+  labs(title="Moths Empirical logits by Distance from Liverpool")
+```
+
+### f) What should we conclude from the plots in (d)? What do they say about the possibility of an interaction between morph and distance?
+
+An empirical logits plot helps us evaluate the validity of the linearity assumption of the model, which states that the logit(p) is supposed to be a linear function of the explanatory variables. The plots we have show relatively linear relationships but have opposite sign slopes, which does raise some concerns about the assumption.
+
+#### g) Create a model with `DISTANCE`, `MORPH`, and the interaction between both variables. Interpret all the coefficients. 
+
+```{r}
+M2 <- glm(cbind(REMOVED, (PLACED-REMOVED)) ~ DISTANCE + MORPH +DISTANCE*MORPH , 
+          family = binomial(link="logit"), data = moth)
+summary(M2)
+```
+For each one kilometer increase in distance from Liverpool, the odds of a dark moth being removed are expected to multiply by a factor of e^(0.018502) = 1.0187 (1.87% increase).
+
+At distance 0, the odds of a light moth being removed are expected to be e^(0.411257) = 1.51 times the odds of a dark moth being removed (a 51% increase).
+
+For each one kilometer increase in distance from Liverpool, the odds of a light moth being removed are expected to multiply by a factor that is e^(-0.027789) = 0.97 times the increase in odds of being removed per kilometer increase in distance for a dark moth.
+
+### f) How are the odds of removal expected to change for each additional one km in distance from Liverpool for light moths? What about for dark moths?    
+
+For a light moth, the odds of removal per km increase in distance are expected to multiply by a factor of e^(0.018502-0.027789) = 0.99.
+
+For a dark moth, the odds of removal per km increase in distance are expected to multiply by a factor of e^(0.018502) = 1.02.
+
+#### g) Perform a drop-in-deviance test whether there is evidence of an interaction between distance and morph. Explain your conclusion in context.   
+
+```{r}
+drop_in_dev <- anova(M1, M2, test = "F")
+drop_in_dev
+```
+There is a noticeable drop in residual deviance when we include the interaction term between distance and morph, which provides evidence that the interaction term is useful. This means that there is a difference in the rates of change in odds of getting removed per km increase in distance from Liverpool for light and dark moths
+
+#### h) Test the goodness-of-fit for the interaction model.  What can we conclude about this model?
+
+```{r}
+gf_dist("chisq", df = M2$df.residual, geom = "area", fill = "turquoise") + 
+  geom_vline(xintercept=M2$deviance, colour="red")  + theme(legend.position="none")
+```
+
+The model seems to adequately fit the data.
+
+#### i) Fit a quasi-binomial model to the data. Display the model summary and report the estimated dispersion parameter. 
+
+```{r}
+MQB <- glm(cbind(REMOVED, PLACED-REMOVED) ~ DISTANCE + MORPH + DISTANCE * MORPH , 
+           family = quasibinomial(link="logit"), data = moth)
+summary(MQB)
+```
+The estimated dispersion parameter is 1.270859
+
+#### j) Considering the size of the dispersion paramter, and the results of the goodness of fit test, should we be concerned about overdispersion in these data? Explain your answer. 
+
+The goodness of fit test showed that our model is adequate, although it could be better. Similarly, although the estimated dipersion parameter is greater than 1, it does not seem to be that much greater, meaning that our standard errors and confidence intervals are not underestimated that much. Personally, when seeing numbers like these, I would use a quasi-binomial model. But, at the same time, I wouldn't worry that much about overdispersion if someone prefers to use a regular BLR model.
+
+#### k) Calculate confidence intervals for the model coefficients associated with the binomial model in (g) and the quasi-binomial model in (i). How do the widths of the intervals compare? Is this consistent with your observations in (h), (i), nad (j)? Explain. 
+
+```{r}
+confint(M2)
+```
+
+```{r}
+confint(MQB)
+```
+Compared to the coefficients intervals in the regular BLR model, the coefficients intervals in the QB model are either very similar in range or very slightly larger. This is what I would expect to see in a case where overdispersion in the data would not be much of a concern, which means that the numbers and graph that we have seen seem to tell a consistent story.
+
+## Question 2
+
+#### U.S. National Medical Expenditure Survey. The data set NMES1988 in the AER package contains a sample of individuals over 65 who are covered by Medicare in order to assess the demand for health care through physician office visits, outpatient visits, ER visits, hospital stays, etc. The data can be accessed by installing and loading the AER package and then running data(NMES1988). More background information and references about the NMES1988 data can be found in help pages for the AER package. 
+
+```{r}
+library(AER)
+data(NMES1988)
+```
+
+#### a) Create a histogram of the number of visits. Describe your observations.   
+```{r, fig.align='left'}
+ggplot(data=NMES1988, aes(x=visits)) + geom_histogram()
+```
+There are many observations with 0 visits
+
+### b) Calculate the mean number of visits for each of the three health categories, and the proportion of people in each category with zero visits. Then calculate the proportion of zeros you would expect to see under a Poisson distribution with observed mean for each category. What does this tell us about the validity of the Poisson model for these data? What kind of model would be a better fit?  
+
+```{r}
+NMES1988 %>% group_by(health) %>%
+  summarise(meanVisits = mean(visits),
+            prop_zero = mean(visits==0),
+            n=n())
+```
+```{r}
+dpois(0, 8.897112)
+dpois(0, 5.510687)
+dpois(0, 3.428571)
+```
+
+The proportion of zeros in our data is higher than expected under a Poisson model with means equal to those observed in the data:
+  - 0.11 compared to 0.00014 for people with poor health
+  - 0.15 compared to 0.004 for people with average health
+  - 0.24 compared to 0.03 for people with excellent health
+
+#### c) Fit a ZIP model for the number of visits using chronic, health, and insurance as predictors for the Poisson count, and chronic and insurance as the predictors for the logistic part of the model. Then, provide interpretations in context for the following model parameters: chronic in the Poisson part of the model, poor health in the Poisson part of the model, insurance in the logistic part of the model
+
+```{r}
+zip.m <- zeroinfl(visits ~ chronic + health + insurance | chronic + insurance, 
+                   data = NMES1988)
+summary(zip.m)
+```
+
+For patients who visit the hospital, for each additional chronic condition that they have, the average number of visits for them multiplies by a factor of e^0.11868 = 1.126, assuming that we are the person has the same insurance status and health condition.
+
+Assuming that insurance status and number of chronic conditions are the same, the number of visits that people with poor health have is e^0.29470 = 1.343 times the number of visits that people with average health have, if they do visit the hospital.
+
+The odds that a person with insurance not visiting the hospital are e^(-0.88314) = 0.41 times the odds of a person without insurance not visiting the hospital.
+
+### d) Calculate the probability that a person with one chronic condition, who is average health, and who has insurance never seeks any medical care.   
+
+\[\frac{e^{-0.37426 - 0.56112 - 0.88314}}{1 - e^{-0.37426 - 0.56112 - 0.88314}} = 0.194\]
+
+
+### e) Assuming the person described in (d) does sometimes seek medical care, calculate the expected number of visits for that person during the span of this study.   
+
+\[{e^{1.55878 + 0.11868 + 0.14467}} = 6.2\] The expected average number of visits for that person is 6.
+
+
+## Question 3
+
+### For (a)-(c), refer to the dataframe below shows fictional data pertaining to the number of questions answered correctly on a 5-question, multiple choice quiz, taken by 3 different students. Also shown are the number of classes each student missed in the two weeks before the quiz.  
+
+```{r}
+MissedClasses <- c(0,1,3)
+Correct <- c(4, 5, 2)
+QuizResults <- data.frame(MissedClasses, Correct)
+QuizResults
+```
+
+### a) Let $Y_i$ represent the number of questions answered correctly by student $i$, and $x_i$ represent the number of missed classes. Consider a binomial logistic regression model of the form:
+
+\[
+Y_i\sim\text{Binom}(5,p_i), 
+\]
+
+where 
+\[
+log\left(\frac{p_i}{1-p_i}\right)=\beta_0+\beta_1x_i
+\]
+
+### Write the likelihood function in terms of $\beta_0$ and $\beta_1$.    
+
+\[Lik(\beta_0,\beta_1) \propto
+(\frac{e^{\beta_0 }}{1 + e^{\beta_0 }})^4 
+(1-(\frac{e^{\beta_0 }}{1 + e^{\beta_0 }}))^1
+\]
+\[
+(\frac{e^{\beta_0 + \beta_1}}{1 + e^{\beta_0 + \beta_1}})^5
+(1-(\frac{e^{\beta_0 + \beta_1}}{1 + e^{\beta_0 + \beta_1}}))^0
+(\frac{e^{\beta_0 + 3\beta_1}}{1 + e^{\beta_0 + 3\beta_1}})^2
+(1-(\frac{e^{\beta_0 + 3\beta_1}}{1 + e^{\beta_0 + 3\beta_1}}))^3
+\]
+
+### b) Write a function to numerically approximate the estimates of $\beta_0$ and $\beta_1$ that maximize the likelihood function. See 7.3.13 for an example.   
+
+### Hints:
+### 1) One way to do this is with a function that takes in 6 inputs: the number of correct answers by each of the 3 students, the number of classes missed by each of the 3 students, and the number of points to include in the grid search.
+### 2) You'll need to expand the grid search beyond -1 to 1. A range of -3 to 3 should be sufficient. )   
+
+```{r}
+Lik <- function(corr1,corr2,corr3,miss1,miss2,miss3,nGrid){
+    b0 <- seq(-3, 3, length = nGrid)  # values of b0 
+    b1 <- seq(-3, 3, length = nGrid)  # values of b1
+    B <- expand.grid(b0, b1)  # create all combinations of b0 and b1
+    names(B) <- c("b0", "b1")  # give B the right names
+    B <- B %>% mutate(Lik = ((exp(b0+b1*miss1))/(1+exp(b0+b1*miss1)))^corr1*
+                        (1-((exp(b0+b1*miss1))/(1+exp(b0+b1*miss1))))^(5-corr1)*
+                        ((exp(b0+b1*miss2))/(1+exp(b0+b1*miss2)))^corr2*
+                        (1-((exp(b0+b1*miss2)))/(1+exp(b0+b1*miss2)))^(5-corr2)*
+                        ((exp(b0+b1*miss3))/(1+exp(b0+b1*miss3)))^corr3*
+                        (1-((exp(b0+b1*miss3)))/(1+exp(b0+b1*miss3)))^(5-corr3)
+                      )
+#evaluate function
+    return(B[B$Lik==max(B$Lik),]) # find and return combination of b0 and b1 that maximize B.     
+}
+
+Lik(4, 5, 2, 0, 1, 3, 1000) 
+```
+
+### c) Use the `glm()` function to fit the model to the QuizResults dataframe. Verify that the estimates you calculated match those in the R output.   
+
+```{r}
+M <- glm(data = QuizResults, cbind(Correct, 5-Correct) ~ MissedClasses , 
+         family = binomial(link="logit"))
+summary(M)
+```
+The coefficients are really similar to the results of my equation.
+
+### For (d)-(f), refer to the dataframe below shows fictional data pertaining to the number of runs scored by a baseball team, using the number of hits they got in a random sample of 3 games.   
+
+```{r}
+Runs <- c(5,2,7)
+Hits <- c(9, 7, 13)
+HitsRuns <- data.frame(Hits, Runs)
+HitsRuns
+```
+
+
+### d) Let $Y_i$ represent the number of runs scored in game $i$, and $x_i$ represent the hits. Consider a Poisson regression model of the form:
+
+\[
+Y_i\sim\text{Pois}(\lambda_i), 
+\]
+
+where 
+\[
+log\left(\lambda_i\right)=\beta_0+\beta_1x_i
+\]
+
+### Write the likelihood function in terms of $\beta_0$ and $\beta_1$.    
+
+\[Lik(\beta_0,\beta_1) \propto 
+\frac{(e^{-(\beta_0 + 9\beta_1)})*(\beta_0 + 9\beta_1)^{5}}{(5)!} +
+\frac{(e^{-(\beta_0 + 7\beta_1)})*(\beta_0 + 7\beta_1)^{2}}{(2)!} +
+\frac{(e^{-(\beta_0 + 13\beta_1)})*(\beta_0 + 13\beta_1)^{7}}{(7)!}
+\]
+
+### e) Write a function to numerically approximate the estimates of $\beta_0$ and $\beta_1$ that maximize the likelihood function. See 7.3.13 for an example.   
+
+### Hints:
+### 1) One way to do this is with a function that takes in 6 inputs: the number of runs in each of the 3 games, the number of hits in each of the 3 games, and the number of points to include in the grid search.
+### 2) A grid search between -0.5 and 0.5 should be sufficient for both parameters.  
+
+```{r}
+Lik <- function(run1,run2,run3,hit1,hit2,hit3,nGrid){
+    b0 <- seq(-0.5, 0.5, length = nGrid)  # values of b0 
+    b1 <- seq(-0.5, 0.5, length = nGrid)  # values of b1
+    B <- expand.grid(b0, b1)  # create all combinations of b0 and b1
+    names(B) <- c("b0", "b1")  # give B the right names
+    B <- B %>% mutate(Lik = (dpois(run1, exp(b0+b1*hit1), log=TRUE)) +
+                        (dpois(run2, exp(b0+b1*hit2), log=TRUE)) +
+                        (dpois(run3, exp(b0+b1*hit3), log=TRUE))
+                      )
+#evaluate function
+    return(B[B$Lik==max(B$Lik),]) # find and return combination of b0 and b1 that maximize B.     
+}
+
+Lik(5,2,7,9,7,13,1000)
+```
+
+
+### f) Use the `glm()` function to fit the model to the HitsRuns dataframe. Verify that the estimates you calculated match those in the R output.   
+
+
+```{r}
+M = glm(data = HitsRuns, Runs ~ Hits , family = "poisson")
+summary(M)
+```
+The estimates very closely match the results from my function.
