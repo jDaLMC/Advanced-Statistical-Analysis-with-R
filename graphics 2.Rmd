@@ -1,0 +1,221 @@
+---
+title: "Sate GDP"
+date: "5/2/2023"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE, fig.height=4, fig.width=10)
+```
+
+```{r}
+# load packages - add any you would like
+library(tidyverse)
+library(lme4)
+library(lmerTest)
+library(gridExtra)
+library(knitr)
+library(stringr)
+library(zoo)
+library(dplyr)
+```
+
+```{r}
+gdp <- read.csv("Table.csv") %>% rename(xState = GeoName)
+names(gdp)=str_sub(names(gdp),2)
+gdp <- gdp %>% pivot_longer('1997':'2018',names_to = "Year", values_to = "GDP")
+
+unemployment <- read.csv("Copy of emp-unemployment.csv") %>% rename(xState = Area)
+names(unemployment)=str_sub(names(unemployment),2)
+unemployment <- unemployment %>% pivot_longer('1997':'2018',names_to = "Year", values_to = "Unemployment")
+
+glimpse(gdp)
+```
+
+```{r}
+join_1 <- full_join(gdp,unemployment, by=c('State','Year')) %>% dplyr::select(-'eoFips',-c('2019':'2022'),-c('1980':'1996'))
+```
+
+```{r}
+
+regions <- read.csv("https://raw.githubusercontent.com/cphalpert/census-regions/master/us%20census%20bureau%20regions%20and%20divisions.csv")
+
+join_2 <- right_join(join_1,regions, by='State') %>% dplyr::select(-State.Code)
+
+popest <- read.csv("Popest.csv") %>% rename(xState.00 = State)
+names(popest)=str_sub(names(popest),2,-4)
+popest <- popest %>% pivot_longer('1997':'2018',names_to = "Year", values_to = "PopEst")
+
+join_3 <- left_join(join_2,popest,by=c('State','Year')) %>% mutate(Year = as.integer(Year))
+join_3$gdp_per_capita <- join_3$GDP*10^6/join_3$PopEst
+
+
+
+elections <- read.csv("1976-2020-president.csv") %>% 
+  filter(year>=1996 & year<=2018) %>%
+  group_by(state,year) %>% top_n(1,candidatevotes) %>%
+  mutate(party = party_simplified) %>%
+  dplyr::select(year,state,party)
+  
+elections$state = str_to_title(elections$state)
+elections$party = str_sub(elections$party,1,1)
+
+ds_years <- data.frame(1996:2018) %>% slice(rep(1:n(), each = 51))
+ds_states <- data.frame(unique(elections$state))
+ds_states <- as.data.frame(lapply(ds_states,rep,23))
+
+ds_final <- data.frame(ds_years$X1996.2018,ds_states$unique.elections.state.) %>% 
+  rename(year = 'ds_years.X1996.2018', state = 'ds_states.unique.elections.state.') %>%
+  left_join(elections,by = c('year','state')) %>% 
+  arrange(state) %>% na.locf() %>% 
+  group_by(state) %>% mutate(party=lag(party)) %>% ungroup() %>% 
+  right_join(join_3, by=c('year'='Year','state'='State')) %>%
+  mutate(prev_party=party,gdp=GDP,unemp=Unemployment,reg=Region,div=Division,pop_est=PopEst) %>%
+  dplyr::select(-c(party,GDP,Unemployment,Region,Division,PopEst))
+```
+
+```{r}
+glimpse(ds_final)
+```
+
+
+```{r, fig.cap = "Distribution of State's GDP Per Capita Within 1 Year"}
+ggplot(data = ds_final, aes(x = gdp_per_capita)) + 
+  geom_histogram(fill = "darkolivegreen") + 
+   xlab("GDP Per Capita") + ylab("Count")
+```
+
+```{r, fig.cap = "Boxplot of GDP Per Capita by Region"}
+ggplot(data=ds_final,aes(factor(reg),gdp_per_capita)) +
+  geom_boxplot(fill = "darkolivegreen") + 
+coord_flip() + ylab("GDP Per Capita") + xlab("Region")
+```
+
+```{r fig.cap = "Boxplot of GDP Per Capita by Division"}
+ggplot(data=ds_final,aes(factor(div),gdp_per_capita)) +
+  geom_boxplot(fill = "darkolivegreen") + 
+coord_flip() + ylab("GDP Per Capita") + xlab("Division")
+```
+
+```{r}
+ds_year_party <- ds_final %>% 
+  group_by(year, prev_party) %>%
+  dplyr::summarize(meangdppercapita = mean(gdp_per_capita))
+
+ds_year_party <- na.omit(ds_year_party)
+```
+
+```{r, fig.cap = "Average GDP over Time for Democrat V Republican Voting States"}
+ggplot(data = ds_year_party, aes(x = year, y = meangdppercapita)) + 
+  geom_point() +
+  geom_smooth(method="lm",color="darkolivegreen") + 
+  facet_wrap(~ prev_party, nrow = 2) +
+  xlab("Year")+
+  ylab("Mean GDP Per Capita")
+```
+
+```{r}
+ds_year_party2 <- ds_final %>% 
+  group_by(year, prev_party) %>%
+  dplyr::summarize(meanunemp = mean(unemp))
+
+ds_year_party2 <- na.omit(ds_year_party2)
+```
+
+```{r, fig.cap = "Average Unemployment over Time for Democrat V Republican Voting States"}
+ggplot(data = ds_year_party2, aes(x = year, y = meanunemp)) + 
+  geom_point() +
+  geom_smooth(method="lm",color="darkolivegreen") + 
+  facet_wrap(~ prev_party, nrow = 2) +
+  xlab("Year")+
+  ylab("Mean Unemployment")
+```
+
+```{r, fig.cap = "Stacked Bargraph of Party by Midwest State"}
+ds_midwest <- ds_final %>%
+  filter(reg == "Midwest")
+
+
+ggplot(data = ds_midwest) + 
+  stat_count(mapping = aes(x = state, fill=prev_party) ) + 
+  xlab("Midwest State")
+```
+
+
+### Supplementary Material
+First, we will explore how GDP per capita and party over the years affect each other within each state:ve("prelim.png")
+
+There is a general positive trend in GDP per capita over the years for the majority of the states, with rates of change fluctuating among them as well as potical parties. But, since there are 50 states, these plots present a lot of information which we might not be able to generalize with confidence and accuracy.
+
+We can look at regions as opposed to individual states to examine possible trends and check the validity of our prior generalization.
+```{r, fig.align='center', fig.cap="Spaghetti plots of GDP per capita over time for all states, faceted by region", echo=FALSE}
+ds_final %>% ggplot(aes(x = year, y = gdp_per_capita)) + 
+  geom_line(aes(group = state), color="grey") + 
+  facet_wrap(.~div) + 
+  geom_smooth(aes(group=1),color="black",linewidth=1,se=FALSE) + ylab("GDP per Capita") + xlab("Year")
+```
+It seems that our initial abstraction of increases in GDP per capita over the years was correct to an extent. Then, state and political party, as variables, do affect GDP per capita.
+
+Next, we examine unemployment rate and see how it changes over time for states of each party.
+```{r, fig.align='center',  fig.cap = "Average Unemployment over Time for Democrat V Republican Voting States",echo=FALSE}
+ds_year_party2 <- ds_final %>% 
+  group_by(year, prev_party,state) %>%
+  dplyr::summarize(meanunemp = mean(unemp))
+
+ds_year_party2 <- na.omit(ds_year_party2)
+
+ggplot(data = ds_year_party2, aes(x = year, y = meanunemp)) + 
+  geom_point() +
+  geom_smooth(method="lm",color="darkolivegreen") + 
+  facet_wrap(~ prev_party, nrow = 2) +
+  xlab("Year")+
+  ylab("Mean Unemployment")
+```
+Despite slight differences in average unemployment rates for states of each political party, the overall (positive) trends over time are similar. But, we should be careful and consider that visualizing only the average unemployment rates might not yield accurate trends due to the lack of consideration of other variables. So, we will look at the relationship between unemployment rate and GDP per capita, in 4 quartiles, over the years.
+```{r, fig.align='center',  echo = FALSE, fig.cap = "Unemployment Rate over the Years of the States at each Quartile of GDP per Capita", fig.width=12}
+sample <- ds_final %>%
+  mutate(splitup = paste("Quartile", 
+                         as.numeric(cut2(gdp_per_capita, g=4))))
+
+ggplot(sample,aes(x=year,y=unemp)) + 
+  geom_line(aes(group=state),color="grey") + 
+  geom_smooth(method="loess",color="black",se=FALSE,size=.75) +
+  facet_grid(~splitup) +
+  labs(x="Year",y="Unemployment Rate") 
+```
+Surprisingly, we find a general negative trend in unemployment rate for every quartile of GDP per capita here. Although contradiction may seem concerning, this actually is a good sign because it suggest that both unemployment rate and GDP per capita can be useful explanatory variables for our models.
+
+
+```{r, echo=FALSE}
+# M1 <- lmer(data=ds_final, gdp_per_capita ~ pop_est + unemp +  prev_party + (year|state)  + (1|div))
+# M2 <- lmer(data=ds_final, gdp_per_capita ~ pop_est + unemp +  year + div + (1|state))
+# M3 <- lmer(data=ds_final, gdp_per_capita ~ unemp +  year  + (1|state))
+# M4 <- lmer(data=ds_final, gdp_per_capita ~ pop_dens + unemp +  year + div + (1|state))
+# M5 <- lmer(data=ds_final, gdp_per_capita ~ pop_dens + unemp +  year + div + prev_party +  (1|state))
+# M6 <- lmer(data=ds_final, gdp_per_capita ~ pop_dens + unemp +  year  + prev_party +  (1|state) + (1|div))
+# M7 <- lmer(data=ds_final, gdp_per_capita ~ unemp +  year  + prev_party +  (1|state) + (1|div))
+# M8 <- lmer(data=ds_final, gdp_per_capita ~ unemp +  year  + prev_party +  div + div:year + (1|state))
+# M9 <- lmer(data=ds_final, gdp_per_capita ~ unemp +  year  + prev_party +  div + unemp:year + (1|state))
+# M10 <- lmer(data=ds_final, gdp_per_capita ~ unemp +  year  + prev_party +  div + prev_party:year + (1|state))
+# M11 <- lmer(data=ds_final, gdp_per_capita ~ unemp +  year  + prev_party + pop_est +  div + div:year + (1|state))
+# M12 <- lmer(data=ds_final, gdp_per_capita ~ unemp +  year  + prev_party + pop_est +  div + unemp:year + (1|state))
+# M13 <- lmer(data=ds_final, gdp_per_capita ~ unemp +  year  + prev_party  + area +   div + div:year + (1|state))
+# M14 <- lmer(data=ds_final, gdp_per_capita ~ unemp +  year  + prev_party  + area + pop_est +  div + div:year + (1|state))
+# M15 <- lmer(data=ds_final, gdp_per_capita ~ unemp +  year  + prev_party  + area + pop_est+  div + div:year + (1|state))
+# M16 <- lmer(data=ds_final, gdp_per_capita ~ unemp +  year  + prev_party  + area +   div + div:year + (1|state) + (unemp|year))
+# M17 <- lmer(data=ds_final, gdp_per_capita ~ unemp +  year  + prev_party  + area +   div + div:year + (1|state) + (area|year))
+# M18 <- ds_final %>% lmer(formula = gdp_per_capita ~ unemp + pop_dens + div:year + (year|state) + (1|year) + (1|div))
+# M19 <- ds_final %>% lmer(formula = gdp_per_capita ~ unemp + pop_dens + div:year + prev_party + (year|state) + (1|year) + (1|div))
+```
+
+
+
+```{r,echo=FALSE}
+A <- ds_final %>% lmer(formula = gdp_per_capita ~ unemp + pop_dens  + prev_party + (1|year))
+
+B <- ds_final %>% lmer(formula =  gdp_per_capita ~ unemp + pop_dens + div  + prev_party + (1|div))
+
+C <- ds_final %>% lmer(formula = gdp_per_capita ~ unemp + pop_dens + div + prev_party +  (year|state)  + (1|div))
+
+D <- ds_final %>% lmer(formula = gdp_per_capita ~ unemp + pop_dens + year:div + prev_party + (year|state) + (1|year) + (1|div))
+```
